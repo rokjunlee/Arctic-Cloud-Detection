@@ -1,0 +1,1004 @@
+---
+title: "Classifying Cloud-Free Area in Arctic"
+author: "Huy Le (3032370043), RJ Lee (3034269840)"
+output: pdf_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+library(ggplot2)
+library(tidyverse)
+library(janitor)
+library(reshape)
+library(gridExtra)
+library(ggpubr)
+library(corrgram)
+library(corrplot)
+library(caret)
+library(MASS)
+library(plotROC)
+library(pROC)
+library(vcd)
+library(e1071)
+library(testit)
+library(testthat)
+library(randomForest)
+library(knitr)
+library(kableExtra)
+library(forcats)
+```
+
+
+## 1. Data Collection and Exploration
+
+# Question 1 - A
+
+The purpose of this paper is to do cloud detection in the Arctic because of the increasing atmospheric carbon dioxide levels occur in this area, which relates directly to global warming. However, due to the similar remote sensing characteristics of clouds, ice- and snow-covered surfaces, it is hard to apply the MISR operational algorithms. The data from this study was obtained from 10 MISR orbits of path 26 over the Arctic, Northern Greenland, and the Baffin Bay, which is approximately 144 days from April 28 through September 19, 2002. There are six data units, which are MISR blocks 11 – 13, 14 – 16, 17 – 19, 20 – 22, 23 – 25, and 26 – 28 from each orbit are included in this study. However, three of the 60 data units were excluded from this study because the surfaces were open water after the sea ice melted in the summer, and the MISR operational algorithm detects clouds over water well. The research demonstrated with three features, linear correlation of radiation measurements from different MISR view directions (CORR), the standard deviation of MISR nadir red radiation measurements within a small region ($SD_{An}$), and a normalized difference angular index (NDAI), are enough to sufficiently identify clouds, ice- and snow-covered surfaces from each other. This identification can be obtained by using ELCM algorithm that combines classification and clustering frameworks. The method is as follows: construct features based on EDA, use ELCM to produce the first cloud detection product, and then predict the probability of cloudiness by training QDA. After getting the results, they can be used to train QDA to provide probability labels for partly cloudy scenes. The work in this study is useful in determining cloud coverage, which can contribute to the accuracy of current global climate models. Additionally, this study is also significant for statistics which demonstrates the power of statistical thinking and contributions as well as the role of statistics in solving current science questions.
+
+# Question 1 - B
+
+As you can see from the three horizontally aligned maps below, the three maps look quite different. These satellite map visualizations are highly dependent on the time and day each satellite image was taken. For example, if two satellite images were taken soon after the other, then the two satellite images are much more likely to resemble each other compared to another image taken few days earlier at the same location. Since these satellite images are highly dependent on spatial and time components, Independent & Identically Distribution assumption is not justified for this dataset.
+
+```{r, include = F}
+# Read in data --------------------------
+
+# image1.txt
+image1 <- read_table("image_data/image1.txt",
+                     col_names = c("y", "x", "exp_lab", 
+                                   "ndai","sd", "cor", 
+                                   "df", "cf", "bf","af", "an")) %>% 
+  mutate(exp_lab = factor(exp_lab))
+
+# image2.txt
+image2 <- read_table("image_data/image2.txt",
+                     col_names = c("y", "x", "exp_lab", 
+                                   "ndai","sd", "cor", 
+                                   "df", "cf", "bf","af", "an")) %>% 
+  mutate(exp_lab = factor(exp_lab))
+
+# image3.txt
+image3 <- read_table("image_data/image3.txt",
+                     col_names = c("y", "x", "exp_lab", 
+                                   "ndai","sd", "cor", 
+                                   "df", "cf", "bf","af", "an")) %>% 
+  mutate(exp_lab = factor(exp_lab))
+
+```
+
+
+```{r, eval = T, echo = F, message = F}
+# well-labeled beautiful maps using x, y coordinates, and the expert labels 
+# with color of the region based on the expert labels.
+
+# first plot image1, p1
+p1 <- image1 %>% 
+  ggplot(aes(x = x, y = y, 
+             col = exp_lab)) + 
+  geom_point() + 
+  scale_color_manual(labels = c("cloud-free", "unlabeled", "cloud"),
+                     breaks = c("-1", "0", "1"),   
+                     values = c("red", "black", "blue"))  +
+  labs(title = "Image 1",
+       x = "x-coordinate", y = "y-coordinate", 
+       col = "Expert Label")
+
+# second plot image2, p2
+p2 <- image2 %>% 
+  ggplot(aes(x = x, y = y, 
+             col = exp_lab)) + 
+  geom_point() + 
+  scale_color_manual(labels = c("cloud-free", "unlabeled", "cloud"),
+                     breaks = c("-1", "0", "1"),   
+                     values = c("red", "black", "blue"))  +
+  labs(title = "Image 2",
+       x = "x-coordinate", y = "y-coordinate", 
+       col = "Expert Label")
+
+
+# third plot image3, p3
+p3 <- image3 %>% 
+  ggplot(aes(x = x, y = y, 
+             col = exp_lab)) + 
+  geom_point() + 
+  scale_color_manual(labels = c("cloud-free", "unlabeled", "cloud"),
+                     breaks = c("-1", "0", "1"),   
+                     values = c("red", "black", "blue"))  +
+  labs(title = "Image 3",
+       x = "x-coordinate", y = "y-coordinate", 
+       col = "Expert Label")
+
+# put three plots together horizontally
+ggarrange(p1, p2, p3, 
+          ncol = 3, nrow = 1,
+          common.legend = TRUE, legend="bottom")
+```
+
+# Question 1 - C
+
+For this particular section, image1.txt was chosen for the analyses. The reason for picking image1 is that from Part 1-B's EDA map visualization, we see that image1 is the only map data that contains non-neglibiable observations that correspond to all three unique Expert Labels. The map visualizations correponding to image2 and image3 does not seem to have any "cloud" label with bare eye.
+
+NDAI against Expert Labels clearly shows a clear relationship. When Expert Label is "cloud free", the large proportion of NDAI's distribution is concentrated on the negative real value, in fact seventy-fifth percentile is close to 0. However, the NDAI values corresponding to when Expert Label is "cloud" are mostly positive number. 
+
+SD against Expert Label displays interesting pattern as well. As you can see from the overlying boxplots, when the Expert Label "cloud", SD is much more spread out than when the Expert Label is "cloud-free". The median is smaller when Expert Label is "cloud_free". In both Expert Label cases, there are outliers whose values are much greater than the seventy-fifth percentile.
+
+Finally, CORR against Expert Label shows the following pattern: the distribution of COR is more spread out when Expert Label is "cloud" than when Expert Label is "cloud free". In both labels, there are outliers much smaller than twenty-fifth percentile value and outliers much greater than seventy-fifth percentile. 
+
+```{r, eval = T, echo = F}
+#relationship between expert labels with individual features--------
+
+exp_lab_graph <- function(data, y_var){
+  # data is the dataframe
+  # y_var: name of variable in CHARACTER
+  plot <- data %>% 
+    ggplot(aes(x = data[["exp_lab"]], y=data[[y_var]])) +
+    geom_jitter(alpha = 0.01) +
+    geom_boxplot(aes(y = data[[y_var]]), 
+                 alpha = 0.1, color = "red") +
+    scale_x_discrete(labels=c("cloud-free", "unlabeled", "cloud")) +
+    labs(#title = "Scatter/Boxplot against Expert Label",
+         subtitle = "scatterpoints are jittered",
+         x = "Expert Label", y = y_var) +
+    theme_bw()
+  return(plot)
+}
+
+#Arbitrarily picked image1
+el_ndai <- exp_lab_graph(image1, "ndai")
+el_sd <- exp_lab_graph(image1, "sd")
+el_cor <- exp_lab_graph(image1, "cor")
+
+ggarrange(el_ndai, el_sd, el_cor, 
+          ncol=3, nrow=1,
+          common.legend = TRUE, 
+          legend="bottom")
+```
+
+```{r, eval = T, echo = F}
+#correlation matrix
+# for image1, image2, image3
+image1_sub <- image1 %>% subset() %>% dplyr::select(-c(exp_lab))
+image2_sub <- image2 %>% subset() %>% dplyr::select(-c(exp_lab))
+image3_sub <- image3 %>% subset() %>% dplyr::select(-c(exp_lab))
+par(mfrow=c(2,2))
+cor1 <- corrplot(cor(image1_sub),
+         method = "pie",         
+         title = "Corr matrix of Image 1 data",
+         mar=c(0,0,2,0))
+
+cor2 <- corrplot(cor(image2_sub),
+         method = "pie",      
+         title = "Corr matrix of Image 2 data",
+         mar=c(0,0,2,0))
+
+cor3 <- corrplot(cor(image3_sub),
+         method = "pie",      
+         title = "Corr matrix of Image 3 data",
+         mar=c(0,0,2,0))
+```
+
+## 2. Preparation
+#### Question 2 - A: (Data Split)
+```{r, echo = F}
+# row bind all three data sets <- row numbers will be used for checking
+image <- rbind(image1, image2, image3)
+
+# 70% train / 20% validation / 10% test 
+set.seed(1)
+# for image 1
+test_index1 <- sample(nrow(image1) * 0.1, replace = F)
+image_test1 <- image1[test_index1, ]
+
+image_not_test1 <- image1[-test_index1, ]
+val_index1 <- sample(nrow(image_not_test1) * 0.2, replace = F)
+image_val1 <- image_not_test1[val_index1, ]
+image_train1 <- image_not_test1[-val_index1, ]
+
+# for image 2
+test_index2 <- sample(nrow(image2) * 0.1, replace = F)
+image_test2 <- image2[test_index2, ]
+
+image_not_test2 <- image2[-test_index2, ]
+val_index2 <- sample(nrow(image_not_test2) * 0.2, replace = F)
+image_val2 <- image_not_test2[val_index2, ]
+image_train2 <- image_not_test2[-val_index2, ]
+
+# for image 3
+test_index3 <- sample(nrow(image3) * 0.1, replace = F)
+image_test3 <- image3[test_index3, ]
+
+image_not_test3 <- image3[-test_index3, ]
+val_index3 <- sample(nrow(image_not_test3) * 0.2, replace = F)
+image_val3 <- image_not_test3[val_index3, ]
+image_train3 <- image_not_test3[-val_index3, ]
+
+
+
+# create image_train
+image_train <- rbind(image_train1, image_train2, image_train3)
+
+# create image_val
+image_val <- rbind(image_val1, image_val2, image_val3)
+
+# create image_test
+image_test <- rbind(image_test1, image_test2, image_test3)
+
+
+# check
+# nrow(image_test)+nrow(image_val)+nrow(image_train) == nrow(image) # TRUE
+
+# train, val, test data: image_train, image_val, image_test
+```
+
+As mentioned above, Independent & Identically Distribution assumption is not justified for this dataset. Therefore, data splitting was done separately for each of the three datasets before they were merged. To be more specific, image1 data was split into training, validation and test data in 70%, 20%, and 10% ratio. The same splitting was done for image2 and image3. Then, the training data sets of image1, image2, and image3 were rowbinded to create one (big) training dataset caled `image_train`. Same method was used to create `image_val` and `image_test`. 
+
+Another suggested method is the following: the ratio we are using here is 70 (training), 20 (validation), 10 (testing). In order to account that the data is not i.i.d. we can first concatenate all three image data sets, then we will split base on the expert labels i.e. -1, 0, 1. Specifically, we split observations with expert label 1 using the ratio 70-20-10 for the train-valid-test set, and similarly for 0 and -1. After that, we can concatenate them by set.
+
+
+#### Question 2 - B: (Baseline)
+```{r, echo = F}
+#trivial classifier
+  #sets all labels to -1
+
+# on validation set
+val_mean <- mean(-1 == image_val$exp_lab)  # 0.1224296
+  # 12.2% accuracy
+
+# on test set
+test_mean <- mean(-1 == image_test$exp_lab) # 0.03663831
+  # 3.7% accuracy 
+```
+The accuracy of the trivial classifier which sets all labels to -1 achieves accuracies of 12.2% and 3.7% on validation set and test set, respectively. Such trivial classifier will achieve high accuracy when the proportion of -1 is high in the Expert Label field in the validation and test sets.
+
+
+#### Question 2 - C: (First order importance)
+```{r,echo = F}
+# correlations of exp_lab against all the other variables
+exp_lab_cor <- image %>% 
+  mutate(exp_lab = as.integer(exp_lab)) %>% 
+  dplyr::select(exp_lab, everything()) %>% 
+  cor() %>% .[, 1]
+
+# ordering absolute correlation in decreasing order
+tmp_1 <- exp_lab_cor[order(abs(exp_lab_cor), decreasing = T)][-1]
+
+# top 4 are af, bf, an ,cf
+top4 <- exp_lab_cor[order(abs(exp_lab_cor), decreasing = T)] %>% names() %>% .[-1]
+
+tibble(var = exp_lab_cor[order(abs(exp_lab_cor), decreasing = T)] %>% 
+         names() %>% .[-1] %>% factor(),
+       cor = exp_lab_cor[order(abs(exp_lab_cor), decreasing = T)][-1]) %>% 
+  ggplot(aes(x = cor, y = fct_reorder(var, cor))) +
+  geom_point() +
+  geom_vline(xintercept = 0 , col ="red") +
+  theme_bw() +
+  coord_flip() +
+  labs(title = "Correlation with Expert Label",
+       subtitle = "increasing order")
+
+# correlation matrix with only af, bf, an, cf
+#image[, 8:11] %>% 
+#  cor()
+# correlation between af and bf is greater than 0.95
+    # bf contains essentially same information <- so not needed
+# correlation between af and an is greater than 0.97
+    # an contains essentially same information <- so not needed
+# Hence ONLY use af and cf
+# not use bf and an
+
+el_af <- exp_lab_graph(image, "af")
+el_cf <- exp_lab_graph(image, "cf")
+el_y <- exp_lab_graph(image, "y")
+
+ggarrange(el_af, el_cf, el_y, 
+          ncol = 3, nrow = 1,
+          common.legend = TRUE, 
+          legend="bottom")
+```
+
+Since no classification is done here, the entire dataset - created by merging image1, image2 and image3 - was used to suggest three of the "best" features.
+
+The suggested three best features for correctly classifying Expert Labels are 'AF', 'CF', and 'Y'. Firstly, the correlations between Expert Labels and all the other features were obtained. The four features with the largest aboslute value correlation values are the four radiance angles: AF, BF, AN, and CF. However, multicollinearity needs to be considered. The correlation between AF and AN is 0.97, which means both of the mcontain essentially the same information. Hence if AF is used as one feature to predict Expert Labels, AN will not supply any additional new information to better predict Expert Labels. The same multicollinearity problem occurs with AF and BF. Therefore, both AN and BF features will not be included. Thus, the third suggested feature is 'Y', which had displayed fifth highest correlation value with Expert Label.
+
+
+#### Question 2 - D: (K-fold CV)
+
+Uploaded on GitHub, ``CVgeneric".
+
+```{r, echo = F}
+# For running some machine learning classification, it is better 
+# to have reponse variables as double instead of factors. 
+# Once I change exp_lab to double, all variables are now double
+# Hence the name, image_dbl
+image_dbl <- image %>% 
+  mutate(exp_lab = as.double(exp_lab)) %>% 
+  mutate(exp_lab = exp_lab - 2)
+# image_dbl$exp_lab %>% unique()
+# use this when we need response variable as double
+
+# Loss function -------------------------------------------
+class_acc <- function(y_true, y_hat){
+    #this loss function is just simple classification accuracy
+    # y_true is the true response variable values
+    # y_hat is the predicted values
+  acc <- mean(y_true == y_hat)
+  return(acc)
+}
+#check
+# class_acc(c(1,1,1), c(1,0,1)) #0.6666667
+
+# simple Linear Classifier -------------------------
+linear_classifier <- function(train_y, data){
+  linfit <- lm(train_y ~ ., data = data)
+  return(linfit)
+}
+
+# Generic cross validation (CV) function----------
+set.seed(1)
+
+CVgeneric <- function(classifier, train_x, train_y, K, loss_f){
+  #INPUT  
+    #classifier: pick a classifier, e.g., linear_classifier
+    #            but classifier needs to be a function
+    #train_x: training dataframe 
+    #train_y: train response feature name in CHARACTER
+    #K: number of folds you want to use
+    #loss_f: loss function you want to use
+  #OUTPUT
+    # first element is individual MSE across folds
+    # second element is the average MSE across folds
+  
+  # Create K - folds
+  CVmse <- numeric(K)
+  fold <- createFolds(train_x[[1]], k = K)
+  
+  
+  
+  # for loop to go through each fold
+  for (i in 1:K) {
+    data_loop <- train_x[-fold[[i]], ]      # data for training
+    data_loop_test <- train_x[fold[[i]], ]  # fold used for evaluating
+    y_true_test <- data_loop_test[[train_y]]# true y values for evaluating
+    
+    # when we run a model, we do not want response variable to be 
+    # one of the predictors
+    # If we do not do this, we get an accuracy of 1, which is misleading
+      # because it will use y to predict y, <- perfect classification
+    data_loop_1 <- data_loop
+    data_loop_1[[train_y]] <- NULL
+    
+    # Run the model
+    fit <- classifier(data_loop[[train_y]], data_loop_1)
+    
+    # predict the response variable with model trained
+    
+    if (has_error(predict(fit, newdata = data_loop_test)$class, 
+                  silent = T) == TRUE){
+      # has error part is necessary because for a lda and qda 
+      # need to use predict()$class instead of predict() for
+      # fitted (predicted) values
+      y_hat <- predict(fit, newdata = data_loop_test) %>% 
+      round() %>% 
+      array()
+    
+    # calculate the accuracy
+    acc <- loss_f(y_true_test, y_hat)
+    CVmse[i] <- 1 - acc
+    }else{
+      y_hat <- predict(fit, newdata = data_loop_test)$class %>% 
+        as.double() %>% 
+        array()
+    
+      # calculate the accuracy
+      acc <- loss_f(y_true_test, y_hat)
+      CVmse[i] <- 1 - acc
+    }
+    
+  }
+  # return the average of the MSE
+  return(list(CVmse, mean(CVmse)))
+}
+
+# check
+#CVgeneric(classifier = linear_classifier, 
+#          image_dbl, "exp_lab", 
+#          K = 5, loss_f = class_acc)
+```
+
+
+
+## 3. Modeling
+#### Question 3 - A: several classification methods
+```{r, echo = F, results = 'hide', warning = F, message = F}
+#CV does not have a validation set, you can merge 
+#your training and validation set to fit your CV model.
+image_train %>% dim() # 248803     11
+image_val %>% dim()   # 62199    11
+
+#merge training and validation set
+image_trainval <- rbind(image_train, image_val)
+image_trainval1 <- image_trainval %>% 
+  mutate(exp_lab = as.double(exp_lab)) %>% 
+  mutate(exp_lab = exp_lab - 2)
+image_trainval1 %>% dim() # 311002     11
+image_trainval1$exp_lab %>% unique()  # 0 -1  1
+
+# change the exp_lab from factor to dbl for image_test
+image_test1 <- image_test %>% 
+  mutate(exp_lab = as.double(exp_lab)) %>% 
+  mutate(exp_lab = exp_lab - 2)
+image_test1$exp_lab %>% unique() # -1  1  0
+
+
+set.seed(1)
+# Logistic Regression -----------------------
+
+  # for Logistic the response variable should be in between 
+  # 0 and 1
+  # therefore I will modify the image_trainval's exp_lab's range
+  # appropriately
+
+# for trainval
+image_trainval_log <- image_trainval1
+image_trainval_log$exp_lab[image_trainval_log$exp_lab == 1] <- 0
+image_trainval_log$exp_lab[image_trainval_log$exp_lab == -1] <- 1
+sum(image_trainval_log$exp_lab == 1)  #49180
+sum(image_trainval1$exp_lab == -1)    #49180
+sum(image_trainval_log$exp_lab == 0)  #261822
+sum(image_trainval1$exp_lab == 0)     # 120550
+sum(image_trainval1$exp_lab == 1)     # 141272  <- 261822 = 120550 + 141272
+
+# do the same for test set as well
+image_test_log <- image_test1
+image_test_log$exp_lab[image_test_log$exp_lab == 1] <- 0
+image_test_log$exp_lab[image_test_log$exp_lab == -1] <- 1
+sum(image_test_log$exp_lab == 1)  #1266
+sum(image_test1$exp_lab == -1)    #1266
+sum(image_test_log$exp_lab == 0)  #33288
+sum(image_test1$exp_lab == 0)     #16945
+sum(image_test1$exp_lab == 1)     #16343 <- 33288 = 16945 + 16343
+
+
+#proportion of 0 in training and test set for 
+sum(image_trainval_log$exp_lab == 0) / (sum(image_trainval_log$exp_lab == 1) + sum(image_trainval_log$exp_lab == 0) ) #0.841866
+
+sum(image_test_log$exp_lab == 0) / (sum(image_test_log$exp_lab == 1) + sum(image_test_log$exp_lab == 0) ) #0.9633617
+
+# 5-fold cross validation ------------------------------------
+logistic_classifier <- function(train_y, data){
+  logfit <- glm(train_y ~ ., 
+                data = data, 
+                family = binomial)
+  #return(logift)
+}
+
+CVgeneric(classifier = logistic_classifier, 
+          image_trainval_log, "exp_lab", 
+          K = 5, loss_f = class_acc)
+#0.8950787 0.8959020 0.8958394 0.8957895 0.8956575
+#0.8956534
+
+yhat_log_test <- predict(glm(exp_lab ~ .,
+                             data = image_trainval_log,
+                             family = binomial),
+                         newdata = image_test_log) %>% round()
+yhat_log_test[yhat_log_test<0.5] <- 0
+yhat_log_test[yhat_log_test>=0.5] <- 1
+class_acc(image_test_log$exp_lab, yhat_log_test)  # 0.9628987
+
+
+# Probit regression----------------------------------
+pro_classifier <- function(train_y, data){
+  profit <- glm(train_y ~ ., 
+                data = data, 
+                family = binomial(link = "probit")) 
+  return(profit)
+}
+
+CVgeneric(classifier = pro_classifier, 
+          image_trainval_log, "exp_lab", 
+          K = 5, loss_f = class_acc)
+#0.8834084 0.8786977 0.8828617 0.8832334 0.8814489
+#0.88193
+
+yhat_pro_test <- predict(glm(exp_lab ~ .,
+                             data = image_trainval_log,
+                             family = binomial(link = "probit")),
+                         newdata = image_test_log) %>% round()
+yhat_pro_test[yhat_pro_test<0.5] <- 0
+yhat_pro_test[yhat_pro_test>=0.5] <- 1
+class_acc(image_test_log$exp_lab, yhat_pro_test) #0.9634196
+
+
+# Linear Regression -----------------------
+linear_classifier <- function(train_y, data){
+  linfit <- lm(train_y ~ ., data = data)
+  return(linfit)
+}
+CVgeneric(classifier = linear_classifier, 
+          image_trainval1, "exp_lab", 
+          K = 5, loss_f = class_acc)
+#0.5241885 0.5231672 0.5213260 0.5225157 0.5226926
+#0.522778
+
+yhat_lin_test <- predict(lm(exp_lab ~ ., data = image_trainval1),
+                         newdata = image_test1) %>% round()
+
+class_acc(image_test1$exp_lab, yhat_lin_test)  # 0.5217341
+
+
+
+# LDA ----------------------------------
+lda_classifier <- function(train_y, data){
+  ldafit <- lda(train_y ~ ., data = data)
+  return(ldafit)
+}
+CVgeneric(classifier = lda_classifier, 
+          image_trainval1, "exp_lab", 
+          K = 5, loss_f = class_acc)
+#0.9578785 0.9570579 0.9558039 0.9543569 0.9550168
+#0.9560228
+
+yhat_lda_test <- predict(lda(exp_lab ~ ., 
+                             data = image_trainval1),
+                         newdata = image_test1)$class 
+
+class_acc(image_test1$exp_lab, yhat_lda_test) #0.7065463
+
+
+
+# QDA ----------------------------------
+qda_classifier <- function(train_y, data){
+  qdafit <- qda(train_y ~ ., data = data) 
+  return(qdafit)
+}
+CVgeneric(classifier = qda_classifier, 
+          image_trainval1, "exp_lab", 
+          K = 5, loss_f = class_acc)
+#0.8779582 0.8797910 0.8786315 0.8785229 0.8795698
+#0.8788947
+
+yhat_qda_test <- predict(qda(exp_lab ~ ., data = image_trainval1),
+                         newdata = image_test1)$class 
+
+class_acc(image_test1$exp_lab, yhat_qda_test) #0.6417491
+
+```
+
+5 fold cross-validation was used to evaluate different models, such as Logistic regression, Probit regression, Linear regression, LDA, and QDA. 
+
+For Logistic and Probit regression, the response variable Expert Label had to be modified so that the response variable fall in between 0 and 1. The researchers in this study are most interested in finding cloud-free regions which are originally labeled as -1. All the cloud-free regions' labels were **re-labeled** to 1 and the other two labels (not cloud -1 & unlabeled 0) were all **re-labeled** to 0. Note however, after this modification, roughly 84.2% of Expert Label is 0, so we want to make sure that the classification can beat this relatively high threshold. 
+
+5-fold cross validation was conducted for Logistic and Probit regressions first. The training accuracy for both regressions was higher than 87% threshold mentioned above: Logistic regression's training classification had an average accuracy of 89.6%, while Probit regression's training classification  had an average accuracy of 88.2%. The corresponding test classification accuracies for Logistic and Probit regression were 96.29% and 96.34%, respectively. In other words, they performed equally well on unseen test datasets. However, these high proportion is **misleading**.
+
+Next, simple linear regression classification was ran, which resulted in average training accuracy of 52.3% and test classification accuracy of 52.2%.
+
+The last two classification methods modeled were LDA and QDA, both of which performed better than the simple linear regression classification. The average training accuracy for LDA was higher than that of QDA; LDA had an average training accuracy of 95.6%, while QDA had an average training accuracy of 87.9%. The test accuracy for LDA and QDA were 70.7% and 64.2%, repectively. So in both training and test datasets, LDA performed better.
+
+
+#### Question 3 - B: ROC curves
+
+The strategy the researchers are using in this paper is to detect cloud-free region, indicated by "-1" in the dataset. Therefore, as was mentioned before, it is not unreasonable to do **one vs all** where we group cloudy and unlabeled responses into one group (re-labeled as 0) and cloud-free as the other group (re-labeled as 1).
+
+```{r, echo = F,warning = F, message = F}
+# modify exp_lab column so that 1 (cloud) is 0 (unlabeled)
+# calling the data set image_2explab
+# Also since logistic regression wants response variable to be 
+# between 0 and 1, so change -1 (cloud-free) label to 1
+
+image_2explab <- image_trainval
+image_2explab$exp_lab[image_trainval$exp_lab == 1] <- 0
+image_2explab$exp_lab[image_trainval$exp_lab == -1] <- 1
+
+#check
+#image_2explab$exp_lab %>% unique() # 0 1
+#sum(image_2explab$exp_lab == 0)    # 261822
+#sum(image_trainval$exp_lab == 1) + sum(image_trainval$exp_lab == 0) # 261822
+
+image_2explab1 <- image_2explab %>% 
+  mutate(exp_lab = as.double(exp_lab)) %>% 
+  mutate(exp_lab = exp_lab - 2)
+
+# Now there are only two classes in exp_lab in image_2explab
+# I am going to plotROC package
+
+# Logistic Regression --------------------------------------
+logfit_2explab <- glm(exp_lab ~ ., 
+                      data = image_2explab1,
+                      family = binomial)
+yhat_log_2explab <- predict(logfit_2explab, newdata = image_2explab) %>% 
+  array()
+
+#roc
+# image_2explab1 %>% 
+#   ggplot(aes(m = yhat_log_2explab, d = exp_lab)) +
+#   geom_roc(n.cuts = 5, labels = T) +
+#   style_roc()
+
+# Probit Regression --------------------------------------
+profit_2explab <- glm(exp_lab ~ ., 
+                      data = image_2explab1,
+                      family = binomial(link = "probit"))
+yhat_pro_2explab <- predict(profit_2explab, newdata = image_2explab1) %>% 
+  array()
+
+#roc
+# image_2explab1 %>% 
+#   ggplot(aes(m = yhat_log_2explab, d = exp_lab)) +
+#   geom_roc(n.cuts = 5, labels = T) +
+#   style_roc()
+
+# LDA --------------------------------------
+lda_2explab <- lda(exp_lab ~ ., 
+                   data = image_2explab1)
+yhat_lda_2explab <- predict(lda_2explab, newdata = image_2explab1)$class %>% 
+  as.double()
+
+#roc
+# image_2explab1 %>% 
+#   ggplot(aes(m = yhat_lda_2explab, d = exp_lab)) +
+#   geom_roc(n.cuts = 5, labels = T) +
+#   style_roc()
+
+# QDA --------------------------------------
+qda_2explab <- qda(exp_lab ~ ., 
+                   data = image_2explab1)
+yhat_qda_2explab <- predict(qda_2explab, newdata = image_2explab1)$class %>% 
+  as.double()
+
+#roc
+# image_2explab1 %>% 
+#   ggplot(aes(m = yhat_lda_2explab, d = exp_lab)) +
+#   geom_roc(n.cuts = 3) +
+#   style_roc()
+
+
+# Combine multiple ROC into one graph ------------
+#tibble(exp_lab = image_2explab1$exp_lab,
+#      log = yhat_log_2explab,
+#       pro = yhat_pro_2explab,
+#       lda = yhat_lda_2explab,
+#       qda = yhat_qda_2explab) %>% 
+#  gather(key, value, - exp_lab) %>% 
+#  mutate(key = factor(key)) %>% 
+#  ggplot(aes(m = value, d = exp_lab, col = key))+
+#  geom_roc(n.cuts = 2, labels = T) +
+#  style_roc()
+
+# OR
+tibble(exp_lab = image_2explab1$exp_lab,
+       log = yhat_log_2explab,
+       pro = yhat_pro_2explab,
+       lda = yhat_lda_2explab,
+       qda = yhat_qda_2explab) %>% 
+  gather(key, value, - exp_lab) %>% 
+  mutate(key = factor(key)) %>% 
+  ggplot(aes(m = value, d = exp_lab))+
+  geom_roc(n.cuts = 3, labels = T) +
+  style_roc() +
+  facet_wrap(~key)
+```
+
+As you can see from the plots above, LDA and QDA show similar ROC curves, and Logistic and Probit regression show similar ROC curves. In fact, the ROC curves for Logistic and Probit regressions are almost on top of each other. Their True positive rate increases very fast until it reaches 0.9 and then False positive cases start to follow up. The ROC curves for LDA and QDA looks like a piecewise linear graphs where true positive rate very rapidly increases up to a certain point, after which the false positive rate increases very rapidly. 
+
+
+In order to find the cutoff point, we will usually choose the point on the ROC curve that is furthest than the 45 degrees (diagonal) line. However, in this situation, between classifying cloud and cloud-free, we are willing to make an error to misclassify cloud to cloud-free. The cutoff points in LDA and QDA are based on the first criteria. 
+
+
+#### Question 3 - C: Bonus
+**Cohen's Kappa** statistic: Kappa statistic can adjust accuracy by taking into account of the fact that correct predictions can be made from chance. For example, in the above case, I have modified expert labeling column so that 1 is cloud-free and 0 is otherwise. So there are 270602 cases where expert label is equal to 0, which is roughly 87% of the case. Hence, just guessing 0 will give an accuracy of 87%. Kappa's value, which ranges from 0 to 1, will increase when the classifier performs better than this simple way of picking the most frequent class.
+
+The formula for Kappa statistic is as follows:
+$$\kappa = \frac{P(a) - P(e)}{1 - P(e)},$$
+
+where $P(a)$ refers to the proportion of actual agreement from classification, and $P(e)$ denotes expected agreement under random chance only. I am going to use a package called Visualizing Categorical Data `vcd` which contains a command that can calculate Kappa statistic for us. 
+
+```{r, echo = F}
+#sum(image_2explab$exp_lab == 0) #261822
+#sum(image_2explab$exp_lab == 1) #49180
+#sum(image_2explab$exp_lab == 0) /(nrow(image_2explab)) #0.841866
+
+# Logistic Regression --------------------------------------
+# predicted values of logistic regression is not always 0 and 1
+# I will make some adjustments so that any predicted value less
+# than 0.5 is 0 and the rest is 1
+
+kappalog <- Kappa(table(image_test_log$exp_lab, yhat_log_test))
+kappalog_val <- summary(kappalog)[[1]][[1]]
+# Kappa value is 0.4426628
+
+# Probit Regression --------------------------------------
+kappapro <- Kappa(table(image_test_log$exp_lab, yhat_pro_test))
+kappapro_val <- summary(kappapro)[[1]][[1]]
+# Kappa value is 0.2473138
+
+# Linear Regression --------------------------------------
+yhat_lin_test1 <- yhat_lin_test
+yhat_lin_test1[yhat_lin_test1==2] <- 1
+yhat_lin_test1[yhat_lin_test1==-2] <- -1
+#yhat_lin_test1 %>% unique()
+
+kappalin <- Kappa(table(image_test$exp_lab, yhat_lin_test1)) 
+kappalin_val <- summary(kappalin)[[1]][[1]]
+# Kappa value is 0.07501307
+
+
+# LDA --------------------------------------
+kappalda <- Kappa(table(image_test1$exp_lab, as.double(yhat_lda_test)))
+kappalda_val <- summary(kappalda)[[1]][[1]]
+# Kappa value is 0.4656745
+
+
+# QDA --------------------------------------
+kappaqda <- Kappa(table(image_test1$exp_lab, as.double(yhat_qda_test)))
+kappaqda_val <- summary(kappaqda)[[1]][[1]]
+# Kappa value is 0.3804665
+
+
+# Report Kappa values
+tibble(Model = c("Logistic", "Probit", "Linear", "LDA", "QDA"),
+       Kappa = c(kappalog_val, kappapro_val, kappalin_val, kappalda_val, kappaqda_val)) %>% 
+  kable() %>% 
+  kable_styling(c("striped", "bordered"))
+```
+
+Cohen's Kappa statistics on test set were obtained above using the model that was trained on the merged dataset that concatenated both the training set and the validation set. We see that the Linear regression have the smallest Kappa statistics; its Kappa Statistic value is less than 0.1, which means it is only slightly better than the baseline classifier. 
+
+However, we observe that LDA and QDA can correctly classify better than the linear regression based on Kappa statistic. When LDA, QDA, and linear regressions were evaluated using cross validation in section 3-A, LDA performed the best, then QDA and lastly Linear regression. We see the same performance order through Kappa statistic as well: the Kappa statistic for LDA is the largest, then followed by QDA and then lastly Linear.
+
+Both Logistic and Probit had very similar ROC curves, but Logistic regression had better cross validation accuracy. Fortunately, the Kappa statistic analysis also provides the same result: the Kappa statistic for Logistic regression is greater than that of Probit. However, we should wary of giving too much confidence in these two models. When the two models were trained, Expert Labels had to be modified so that there were only two levels, 0 and 1. As mentioned above when such modification is implemented, the majority of the labels end up becoming 0 and thus a baseline classifier that just labels 0 for all observations will still give high accuracy. Therefore, the Kappa statistics for Logistic regression and Probit regression is **not** comparable to the Kappa statistics of the other classification models.
+
+
+## 4. Diagnostics
+
+#### Question 4 - A
+Compare Contrast of Discriminant Analysis: LDA vs QDA
+```{r, echo = F, warning = F}
+# 10 fold cross validation
+set.seed(1)
+lda_res <- CVgeneric(classifier = lda_classifier, 
+          image_trainval1, "exp_lab", 
+          K = 10, loss_f = class_acc)
+
+lda_cv_10 <- lda_res[[1]]
+
+qda_res <- CVgeneric(classifier = qda_classifier, 
+          image_trainval1, "exp_lab", 
+          K = 10, loss_f = class_acc)
+
+qda_cv_10 <- qda_res[[1]]
+
+LDA_vs_QDA <- rbind(lda_cv_10,qda_cv_10) 
+average <- apply(LDA_vs_QDA, 1, mean)
+rownames(LDA_vs_QDA) <- c("LDA","QDA")
+method <- c("LDA","QDA")
+LDA_vs_QDA <- LDA_vs_QDA %>% as_tibble()
+names(LDA_vs_QDA) <- c(
+                       "1F", "2F", 
+                       "3F","4F",
+                       "5F","6F",
+                       "7F","8F",
+                       "9F","10F")
+LDA_vs_QDA %>% cbind("Method" = method) %>% as_tibble()
+```
+
+Here we have the average of LDA is 0.956 and 0.879 for QDA.
+
+```{r, eval = T, echo = F,warning = F}
+# Leave-one-out cross validation
+#LDA
+lda_loocv <- lda(exp_lab ~ ., 
+                 CV = T,
+                 data = image_trainval)
+#mean(lda_loocv$class == image_trainval$exp_lab) #0.6441663
+yhat_lda_loocv <- predict(lda(exp_lab ~ ., data = image_trainval), 
+                          newdata = image_test)$class
+#mean(yhat_lda_loocv == image_test$exp_lab) # 0.7065463
+
+#QDA
+qda_loocv <- qda(exp_lab ~ ., 
+                 CV = T,
+                 data = image_trainval)
+#mean(qda_loocv$class == image_trainval$exp_lab) #0.5944721
+yhat_qda_loocv <- predict(qda(exp_lab ~ ., data = image_trainval), 
+                          newdata = image_test)$class
+#mean(yhat_qda_loocv == image_test$exp_lab) # 0.6417491
+
+# how matching are there predictions between lda and qda?
+#mean(lda_loocv$class == qda_loocv$class) # 0.6895133
+
+
+# using their posterior probabilities
+ldaqda <- tibble(count = 1: length(lda_loocv$class),
+                 lda = lda_loocv$class,
+                 lda_prob = apply(lda_loocv$posterior, 1, max) %>% 
+                   array(),  # picking the highest probability in each row
+                 qda = qda_loocv$class,
+                 qda_prob = apply(qda_loocv$posterior, 1, max) %>% 
+                   array()) %>%  
+  mutate(match = lda == qda) # True when LDA and QDA classified same output
+
+# when LDA and QDA classify SAME output
+test1 <- ldaqda %>% 
+  filter(match == T) %>% # when LDA and QDA labels match
+  mutate(prob_diff = qda_prob - lda_prob) %>% 
+  .$prob_diff %>% 
+  range() # -0.4463731  0.6595820
+
+match <- ldaqda %>% 
+  filter(match == T) %>% # match
+  mutate(prob_diff = qda_prob - lda_prob) %>% 
+  ggplot(aes(x = count)) +
+  geom_point(aes(y = prob_diff), 
+             alpha = 0.005, 
+             color = "royalblue") +
+  labs(title = "LDA and QDA Match") +
+  theme_bw()
+
+# when LDA and QDA classify differently
+test3 <- ldaqda %>% 
+  filter(match == F) %>% # when LDA and QDA labels MISmatch
+  mutate(prob_diff = qda_prob - lda_prob) %>% 
+  .$prob_diff %>% 
+  range() #-0.4671612  0.6613566
+
+mismatch <- ldaqda %>% 
+  filter(match == F) %>% #mismatch
+  mutate(prob_diff = qda_prob - lda_prob) %>% 
+  ggplot(aes(x = count)) +
+  geom_point(aes(y = prob_diff), 
+             alpha = 0.005, 
+             color = "royalblue") +
+  labs(title = "LDA and QDA Mismatch") +
+  theme_bw()
+
+ggarrange(match, mismatch, ncol = 2)
+```
+
+Both LDA and QDA's Kappa statistics were much greater than that for Linear regression classification. Also, both classification methods can handle multiple levels in the response variable. LDA and QDA assign certain likelihood probability to each label for each observation, and then the label that gets the greatest possibility gets to be chosen. 
+
+Hence to analyze how LDA and QDA predict labels, the greatest probability assigned to each label was isolated for both models. The difference between the greatest probability used by LDA was subtracted from that used by QDA.
+
+The above procedure were repeated for two cases: when LDA and QDA predictions match and when LDA and QDA classification mismatch. In both cases, we observe that from the visualization above that most of the time the difference in probabiliy is positive, meaning that QDA usually assigns greater probability to the label that ultimately gets to be chosen while LDA usually assigns more comparable probability to the three labels.
+
+#### Question 4 - B
+
+LDA has the highest corresponding Kappa statistics value, so LDA will be analyzed. Among the misclassified cases for the training set, only about 16% of the labels are -1 (cloud-free). Among the misclassified cases for the test set, only about 2% of the labels are -1 (cloud-free). This tells us that most of the misclassification comes from the other two labels. 
+
+```{r, echo = F, warning = F, message = F}
+set.seed(1)
+lda_4b <- lda(exp_lab ~ ., 
+              data = image_trainval)
+
+# accuracy on trained data
+yhat_lda_4b_train <- predict(lda_4b, newdata = image_trainval)$class
+mean_test <- mean(yhat_lda_4b_train == image_trainval$exp_lab) #0.6441888
+
+# making a dataset with a column that tells if
+# lda prediction and true label match
+image_trainval_match <- image_trainval %>% 
+  mutate(lda_hat = yhat_lda_4b_train) %>% 
+  mutate(match = exp_lab == lda_hat,  # comparing lda prediction and true label
+         exp_lab = as.double(exp_lab)) %>%
+  mutate(exp_lab = exp_lab - 2)
+
+# below we see that smallest number of misclassification comes
+# the case when expert label == -1
+g1 <- image_trainval_match %>% 
+  filter(match == F) %>%  # filter only when lda prediction and true label MISmatch
+  ggplot() +
+  geom_histogram(aes(x = exp_lab)) +
+  labs(title = "Test Data") +
+  labs(title = "Train Data") +
+  theme_bw()
+
+check1 <- mean(image_trainval_match %>% 
+       filter(match == F) %>% 
+       .$exp_lab == -1) # 0.1631152 <- roughly 16%
+
+g2 <- image_trainval_match %>% 
+  ggplot() +
+  geom_histogram(aes(x = exp_lab, 
+                     fill = match)) + # to see how much is mismatch (FALSE) for each label
+  labs(title = "Train Data") +
+  theme_bw()
+
+
+
+#accuracy on test data
+yhat_lda_4b_test <- predict(lda_4b, newdata = image_test)$class
+check2 <- mean(yhat_lda_4b_test == image_test$exp_lab)      # 0.7065463
+
+image_test_match <- image_test %>% 
+  mutate(lda_hat = yhat_lda_4b_test) %>% 
+  mutate(match = exp_lab == lda_hat,
+         exp_lab = as.double(exp_lab)) %>%
+  mutate(exp_lab = exp_lab - 2)
+
+
+
+g3 <- image_test_match %>% 
+  filter(match == F) %>% 
+  ggplot() +
+  geom_histogram(aes(x = exp_lab)) +
+  labs(title = "Test Data") +
+  theme_bw()
+
+check3 <- mean(image_test_match %>% 
+       filter(match == F) %>% 
+       .$exp_lab == -1) # 0.01903353 <- 1.9%
+
+g4 <- image_test_match %>% 
+  ggplot() +
+  geom_histogram(aes(x = exp_lab, 
+                     fill = match)) +
+  labs(title = "Test Data") +
+  theme_bw()
+ggarrange(g1, g3, g2, g4, ncol = 2, nrow =2)
+```
+
+#### Question 4 - C
+```{r, echo = F, eval = T}
+#baseline
+tab <- image_trainval_log %>% 
+  group_by(exp_lab) %>% 
+  summarise(n = n())
+
+#mean_test <- mean(image_trainval_log$exp_lab == 0) #0.841866 
+#84% is the baseline accuracy that needs to be beaten
+
+# run the model
+lda_4c <- lda(exp_lab ~ ., 
+              data = image_trainval_log)
+
+# accuracy on trained data
+yhat_lda_4c_train <- predict(lda_4c, newdata = image_trainval_log)$class
+#mean(yhat_lda_4c_train == image_trainval_log$exp_lab) #0.8771873
+
+
+#accuracy on test data
+yhat_lda_4c_test <- predict(lda_4c, newdata = image_test_log)$class
+#mean(yhat_lda_4c_test == image_test_log$exp_lab)      #0.963709
+```
+
+The baseline accuracy that needs to be beaten is 0.841866. The accuracy on train data is 0.8771873 and the accuracy on test data is 0.963709. From section 4 -B & C, we notice that only small amount of misclassification comes from the case when the label is equal to -1 (cloud free), and so most of the misclassification comes from the other labels. Therefore, it is not an unreasobale idea to cluster both "unlabeled" and "cloud" cases into one so that when the model gets trained, the model has more observations to learn about the case when it is **not** "cloud-free", and thus improve the accuracy. LDA assumes equality of covariance matrices of the predictor variables X across each all levels of Y. This assumption is relaxed with the QDA model, which assume covariance matrices are not i.i.d. When considering between LDA & QDA its important to know that LDA is a much less flexible classifier than QDA, and so has substantially lower variance. This can potentially lead to improved prediction performance. But there is a trade-off: if LDA’s assumption that the the predictor variable share a common variance across each Y response class is badly off, then LDA can suffer from high bias. Roughly speaking, LDA tends to be a better bet than QDA if there are relatively few training observations and so reducing variance is crucial. Classifier that can assumes different covariance but NOT from predictor variables X are drawn from a multivariate Gaussian (aka normal) distribution.
+
+
+#### Question 4 - D
+
+Nothing much changes when we consider the data is i.i.d, it is appears that QDA performs better than the LDA. However, when 
+split the data without assuming i.i.d. LDA performs better than QDA. 
+
+#### Question 4 - E
+
+After doing the analysis, we can see that both LDA and QDA perform better than Linear Regression classification. Additionally, logistic regression had better cross validation accuracy. We also discovered that the results of classification analysis are sensitive to how we split the data. In particular, the i.i.d assumption does affect the result of the analysis. Moreover, in this project, we attempted to implement SVM; however, it took too long to compile. Hence, we decided not to include the results in the project. 
+
+
+### Acknowledgement
+
+Contribution by **Huy Le**:
+
+* Summarized the paper
+
+* Considered different methods to split the data
+
+* Formatted the final paper
+
+
+Contribution by **RJ Lee**:
+
+* Genereated functions that can produce different visualizations for EDA
+
+* Wrote the CVgeneric function
+
+* Trained models on the training set and evaluated on test sets
+
+
+Information about **Cohen's Kappa statistic** was found from a textbook titled, *Machine Learning with R*- Second Edition by Brett Lantz.
+
+We have closely followed the questions outlined by the assignment to make progress on the project. After reading in the dataset, we tried drawing graphs with different variables, and when we found interesting relationships, we tried to dig deeper into them. Similarly, for modelling classification, we have tried all the classification methods that were covered in lecture. Some classification methods such as random forest and SVM required too much computation power and so could not be completed with our computers. If we had more time, we would have sampled the dataset to create a *smaller* but representative dataset and then classified with SVM and random forest to see if they can classify better than classification methods that we tried (Logistic, Probit, Linear, LDA, QDA).
+
+
+### GitHub Repo
+https://github.com/rokjunlee/Arctic-Cloud-Detection
+
